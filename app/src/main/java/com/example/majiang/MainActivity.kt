@@ -303,6 +303,7 @@ fun AppRoot(debugImagePath: String? = null) {
 private fun createAnalysisPipeline(context: android.content.Context): AnalysisPipeline {
     // B 阶段新一代模型：正面 YOLO11l@1280 + 牌背 YOLO11m@1280（开发文档 4.1-B）。
     // 1280 切片下切片数约为 640 方案的 1/4，散放牌背辅助模型由混合域训练的新牌背模型替代。
+        // 混合精度：正面 int8（实测框质量无损、速度快）+ 牌背 FP32（int8 实测框回归劣化，见开发文档 10.6）。
     val faceDetector = TileDetector(
         context,
         assetName = "mahjong_11l_1280_int8.tflite",
@@ -312,7 +313,7 @@ private fun createAnalysisPipeline(context: android.content.Context): AnalysisPi
     return try {
         val backDetector = TileDetector(
             context,
-            assetName = "mahjong_11m_back_1280_int8.tflite",
+            assetName = "mahjong_11m_back_1280_fp32.tflite",
             preferGpu = false,
             modelClassCount = 28
         )
