@@ -49,3 +49,4 @@ majiang-runs-*.tar
 
 # video2code 插件状态（与本仓库无关）
 .v2c/
+training/user/device_regression/
