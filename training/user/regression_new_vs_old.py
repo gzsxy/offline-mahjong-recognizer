@@ -84,7 +84,8 @@ def class_nms(boxes, scores, classes, iou=0.3):
         a_i = (boxes[i, 2] - boxes[i, 0]) * (boxes[i, 3] - boxes[i, 1])
         a_r = (boxes[rest, 2] - boxes[rest, 0]) * (boxes[rest, 3] - boxes[rest, 1])
         iou_v = inter / np.maximum(a_i + a_r - inter, 1e-6)
-        suppressed = (classes[rest] == classes[i]) & (iou_v > iou)
+        inter_min = inter / np.maximum(np.minimum(a_i, a_r), 1e-6)
+        suppressed = (classes[rest] == classes[i]) & ((iou_v > iou) | (inter_min > 0.6))
         order = rest[~suppressed]
     return boxes[keep], scores[keep], classes[keep]
 

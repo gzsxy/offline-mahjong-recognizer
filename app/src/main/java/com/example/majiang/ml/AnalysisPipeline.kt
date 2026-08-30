@@ -57,8 +57,8 @@ class AnalysisPipeline(
             }
             val faces = all.filter { it.classId != TileClasses.BACK_ID }
             val backs = all.filter { it.classId == TileClasses.BACK_ID }
-            return (Nms.apply(faces, minOf(globalNmsIou, faceGlobalNmsIou)) +
-                Nms.apply(backs, minOf(globalNmsIou, backGlobalNmsIou)))
+            return (Nms.apply(faces, minOf(globalNmsIou, faceGlobalNmsIou), containmentThreshold = 0.6f) +
+                Nms.apply(backs, minOf(globalNmsIou, backGlobalNmsIou), containmentThreshold = 0.6f))
                 .sortedByDescending { it.score }
         } finally {
             // 出现模型异常时也要释放尚未处理的切片。
