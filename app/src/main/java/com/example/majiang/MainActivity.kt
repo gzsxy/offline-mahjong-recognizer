@@ -47,6 +47,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
@@ -72,6 +73,7 @@ import com.example.majiang.ui.HistoryListScreen
 import com.example.majiang.ui.annotateDetections
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.text.SimpleDateFormat
@@ -80,10 +82,18 @@ import java.util.Locale
 
 private const val TAG = "MahjongApp"
 
+// 调试回归触发器：进程级一次性标记，防止 Activity 重建或重组导致重复触发识别
+private var debugTriggerConsumed = false
+
+// 识别并发门闩：同一时刻只允许一个分析在跑（重复触发直接抑制）
+private val analysisGate = java.util.concurrent.atomic.AtomicBoolean(false)
+
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContent { MaterialTheme { AppRoot() } }
+        // 调试入口：adb shell am start ... --es debug_image /sdcard/xxx.jpg
+        // 免交互直接进识别管线，用于真机自动化回归。
+        setContent { MaterialTheme { AppRoot(debugImagePath = intent?.getStringExtra("debug_image")) } }
     }
 }
 
@@ -99,6 +109,8 @@ sealed interface ScreenState {
 private sealed interface PhotoInput {
     data class Camera(val file: File) : PhotoInput
     data class Gallery(val uri: Uri) : PhotoInput
+    /** 调试回归用：直接引用外部路径，识别后不删除。 */
+    data class DebugFile(val file: File) : PhotoInput
 }
 
 private data class PendingPhoto(val input: PhotoInput, val expected: Int)
@@ -110,7 +122,7 @@ private sealed interface ModelState {
 }
 
 @Composable
-fun AppRoot() {
+fun AppRoot(debugImagePath: String? = null) {
     val context = LocalContext.current
     val appContext = context.applicationContext
     val historyStore = remember { HistoryStore(File(appContext.filesDir, "history")) }
@@ -193,21 +205,50 @@ fun AppRoot() {
         )
     }
 
-    val mainHandler = remember { Handler(Looper.getMainLooper()) }
-    LaunchedEffect(pendingPhoto, pipeline) {
-        val request = pendingPhoto ?: return@LaunchedEffect
-        val activePipeline = pipeline ?: return@LaunchedEffect
+    // 调试回归：冷启动带 debug_image 时自动进识别管线
+    LaunchedEffect(debugImagePath, pipeline) {
+        if (debugImagePath != null && !debugTriggerConsumed && pipeline != null &&
+            pendingPhoto == null && screen == ScreenState.Camera
+        ) {
+            debugTriggerConsumed = true
+            Log.w(TAG, "DEBUG TRIGGER fired, consumed=$debugTriggerConsumed")
+            pendingPhoto = PendingPhoto(
+                PhotoInput.DebugFile(File(debugImagePath)),
+                expected = TileClasses.DEFAULT_EXPECTED_TOTAL
+            )
+            screen = ScreenState.Processing(0, 0)
+        }
+    }
 
-        try {
+    val mainHandler = remember { Handler(Looper.getMainLooper()) }
+    // 识别消费循环：LaunchedEffect(Unit) 永不因 key 变化重启，避免长任务中途被
+    // 取消丢结果；并发由 analysisGate 保证，轮询消费 pendingPhoto。
+    val latestPendingPhoto by rememberUpdatedState(pendingPhoto)
+    val latestPipeline by rememberUpdatedState(pipeline)
+    LaunchedEffect(Unit) {
+        while (true) {
+            val request = latestPendingPhoto
+            val activePipeline = latestPipeline
+            if (request == null || activePipeline == null ||
+                !analysisGate.compareAndSet(false, true)
+            ) {
+                delay(150)
+                continue
+            }
+
+            try {
             val sourceDescription = when (val input = request.input) {
                 is PhotoInput.Camera -> input.file.absolutePath
                 is PhotoInput.Gallery -> input.uri.toString()
+                is PhotoInput.DebugFile -> input.file.absolutePath
             }
-            Log.i(TAG, "analysis started: $sourceDescription")
+            Log.i(TAG, "analysis started(#${System.identityHashCode(request)}): $sourceDescription")
+            Log.i(TAG, "effect enter: pendingPhoto=${pendingPhoto?.hashCode()} pipeline=${activePipeline.hashCode()}")
             val result = withContext(Dispatchers.Default) {
                 val bitmap = when (val input = request.input) {
                     is PhotoInput.Camera -> PhotoDecoder.decode(input.file)
                     is PhotoInput.Gallery -> PhotoDecoder.decode(appContext, input.uri)
+                    is PhotoInput.DebugFile -> PhotoDecoder.decode(input.file)
                 }
                     ?: error("无法读取拍摄的照片")
                 try {
@@ -240,16 +281,21 @@ fun AppRoot() {
             }
             screen = ScreenState.Result(result.first, result.second)
         } catch (error: CancellationException) {
+            Log.w(TAG, "analysis cancelled (leaving composition)")
             throw error
         } catch (error: Exception) {
             Log.e(TAG, "analysis failed", error)
             screen = ScreenState.Error("识别失败：${error.message ?: "未知错误"}")
         } finally {
+            analysisGate.set(false)
             activePipeline.onProgress = null
-            if (request.input is PhotoInput.Camera) {
-                request.input.file.delete()
+            when (request.input) {
+                is PhotoInput.Camera -> request.input.file.delete()
+                is PhotoInput.Gallery, is PhotoInput.DebugFile -> Unit
             }
             pendingPhoto = null
+        }
+        delay(150)
         }
     }
 }

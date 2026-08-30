@@ -310,7 +310,7 @@ android-sdk/platform-tools/adb install -r app/build/outputs/apk/debug/app-debug.
 
 **遗留事项**：
 
-1. Android 16 实机装机验证（UI + 识别耗时实测，预期切片数减半以上、双模型合计耗时低于旧三模型）。
+1. ~~Android 16 实机装机验证~~ → **Android 11 开发机实测已完成（2026-08-31）**：新增 `--es debug_image` 调试入口后脚本化回归，3 张照片 114/116/127 检出（与桌面回归 ±2 内），耗时 54.4–56.5 秒（旧三模型 61 秒，分辨率翻倍反而更快）。期间发现并修复 LaunchedEffect key 重启导致识别结果被丢弃的 bug（改为 LaunchedEffect(Unit) 轮询消费 + analysisGate 并发门闩）。Android 16 实机仍待装机体验。
 2. 正面网格照片无人工点数，新旧差值（新 111–127 vs 旧 122–133）待实机核对裁决。
 3. 用户下次实拍请按附录 A 记录真实张数，特别是牌背网格的总张数（确认 130 口径）。
 
