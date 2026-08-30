@@ -1,0 +1,51 @@
+# ===== 构建产物与缓存 =====
+.gradle/
+.kotlin/
+build/
+app/build/
+
+# ===== 本机工具链与 SDK（体积巨大；根目录锚定，避免误伤 training/tools）=====
+/android-sdk/
+/tools/
+local.properties
+
+# ===== 训练数据与产物（数据集约 12GB、模型权重、训练 run）=====
+# 数据集本体不入库，仅保留各数据集的 schema 配置 data.yaml
+training/datasets/*
+!training/datasets/*/
+training/datasets/*/*
+!training/datasets/*/data.yaml
+training/runs/
+/runs/
+training/venv/
+*.pt
+__pycache__/
+*.pyc
+
+# ===== 隐私：作者私有照片、标注核验与回归产物（不入库）=====
+training/user/photos/
+training/user/photos/*/previews/
+training/user/label_sheets/
+training/user/regression_*/
+training/DGX迁移.md
+
+# ===== 第三方与派生素材 =====
+# 牌面精灵来源（第三方克隆仓库，见 training/synth/generate.py 头注）
+training/assets/tiles-fluffystuff/
+# 作者自有牌具的牌背裁片（可由 training/user/prepare_back_dataset.py 从自己的照片重新生成）
+training/assets/back-sprites/user_*.png
+# 训练过程预览图（可重新生成）
+training/assets/preview/
+
+# ===== 迁移打包产物 =====
+majiang-training-*.tar
+majiang-runs-*.tar
+
+# ===== 会话工具状态与杂项 =====
+.zcode/
+.DS_Store
+*.iml
+.idea/
+
+# video2code 插件状态（与本仓库无关）
+.v2c/

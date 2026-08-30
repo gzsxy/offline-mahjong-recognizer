@@ -1,0 +1,33 @@
+path: training/datasets/mj-user-back-v1
+train: images/train
+val: images/val
+nc: 28
+names:
+  0: wan1
+  1: wan2
+  2: wan3
+  3: wan4
+  4: wan5
+  5: wan6
+  6: wan7
+  7: wan8
+  8: wan9
+  9: tong1
+  10: tong2
+  11: tong3
+  12: tong4
+  13: tong5
+  14: tong6
+  15: tong7
+  16: tong8
+  17: tong9
+  18: tiao1
+  19: tiao2
+  20: tiao3
+  21: tiao4
+  22: tiao5
+  23: tiao6
+  24: tiao7
+  25: tiao8
+  26: tiao9
+  27: back
