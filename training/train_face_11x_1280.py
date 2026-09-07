@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""v2 方案 B1：正面 11x @640 预训（COCO yolo11x 起，mj-v2 28 类）。
+"""v2 方案 B2：正面 11x @1280 微调（起始 = 11x 640 预训 best）。
 
-后续 1280 微调（train_face_11x_1280.py）以此权重为起点。
+数据 = mj-face-1280-mix-v2（与 11l-v2 长程同源，保证两架构可比）。
 """
 
 from __future__ import annotations
@@ -13,10 +13,10 @@ from ultralytics import YOLO
 
 
 ROOT = Path(__file__).resolve().parents[1]
-MODEL = ROOT / "training/runs/pretrained/yolo11x.pt"
-DATA = ROOT / "training/datasets/mj-v2/data.yaml"
+MODEL = ROOT / "training/runs/mj-face-11x-640/weights/best.pt"
+DATA = ROOT / "training/datasets/mj-face-1280-mix-v2/data.yaml"
 PROJECT = ROOT / "training/runs"
-NAME = "mj-face-11x-640"
+NAME = "mj-face-11x-1280"
 
 
 def main() -> None:
@@ -34,19 +34,19 @@ def main() -> None:
     model = YOLO(str(MODEL))
     result = model.train(
         data=str(DATA),
-        epochs=60,
-        imgsz=640,
-        batch=24,
+        epochs=24,
+        imgsz=1280,
+        batch=8,
         device=device,
         workers=8,
         project=str(PROJECT),
         name=NAME,
         exist_ok=True,
         optimizer="AdamW",
-        lr0=0.001,
+        lr0=0.0005,
         lrf=0.01,
         warmup_epochs=3.0,
-        patience=15,
+        patience=8,
         amp=True,
         cache=False,
         close_mosaic=10,

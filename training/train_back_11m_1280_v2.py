@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""v2 方案 B1：正面 11x @640 预训（COCO yolo11x 起，mj-v2 28 类）。
+"""v2 方案 C：牌背 11m @1280 长程重训（起始 = 640 预训 best）。
 
-后续 1280 微调（train_face_11x_1280.py）以此权重为起点。
+数据 = mj-back-1280-mix-v2（新场景合成 6k + v1 合成 1.5k + 用户牌背 1280 切片）。
 """
 
 from __future__ import annotations
@@ -13,10 +13,10 @@ from ultralytics import YOLO
 
 
 ROOT = Path(__file__).resolve().parents[1]
-MODEL = ROOT / "training/runs/pretrained/yolo11x.pt"
-DATA = ROOT / "training/datasets/mj-v2/data.yaml"
+MODEL = ROOT / "training/runs/mj-back-11m-640/weights/best.pt"
+DATA = ROOT / "training/datasets/mj-back-1280-mix-v2/data.yaml"
 PROJECT = ROOT / "training/runs"
-NAME = "mj-face-11x-640"
+NAME = "mj-back-11m-1280-v2"
 
 
 def main() -> None:
@@ -34,29 +34,28 @@ def main() -> None:
     model = YOLO(str(MODEL))
     result = model.train(
         data=str(DATA),
-        epochs=60,
-        imgsz=640,
-        batch=24,
+        epochs=40,
+        imgsz=1280,
+        batch=12,
         device=device,
         workers=8,
         project=str(PROJECT),
         name=NAME,
         exist_ok=True,
         optimizer="AdamW",
-        lr0=0.001,
+        lr0=0.0008,
         lrf=0.01,
         warmup_epochs=3.0,
-        patience=15,
+        patience=10,
         amp=True,
         cache=False,
-        close_mosaic=10,
+        close_mosaic=12,
         mosaic=0.75,
         mixup=0.0,
         degrees=10.0,
         translate=0.1,
         scale=0.4,
         perspective=0.0005,
-        # 麻将牌面有方向性，不做水平翻转（与既有脚本一致）
         fliplr=0.0,
         hsv_h=0.015,
         hsv_s=0.5,

@@ -268,9 +268,18 @@ def generate_image(seed, tiles, cfg):
         for i in rng.sample(range(n_tiles), min(k, n_tiles)):
             forced[i] = BACK_ID
 
-    # per-image shadow direction (single light source), 2-4px, downward-ish
+    # per-image shadow direction (single light source), 随画布等比缩放
     sh_ang = math.radians(rng.uniform(45, 135))
-    sh_mag = rng.uniform(2, 4)
+    scale = CANVAS / 640.0
+    if rng.random() < getattr(cfg, "strong_shadow_prob", 0.0):
+        # 强阴影场景：低角度强光，长而深的投影（640 基准 9-21px）
+        sh_mag = rng.uniform(9, 21) * scale
+        sh_dark = rng.uniform(0.70, 0.90)
+        sh_dilate, sh_blur = 11, rng.uniform(3.0, 6.0)
+    else:
+        sh_mag = rng.uniform(2, 4) * scale
+        sh_dark = 0.55
+        sh_dilate, sh_blur = 5, 1.5
     sh_dx, sh_dy = sh_mag * math.cos(sh_ang), sh_mag * math.sin(sh_ang)
 
     placed = []  # dicts: aabb(full), sprite, cid
@@ -309,9 +318,9 @@ def generate_image(seed, tiles, cfg):
         # thickness/shadow: dark, slightly dilated silhouette at offset
         alpha = spr.getchannel("A")
         sil = Image.new("RGBA", spr.size, (10, 10, 15, 0))
-        sil.putalpha(alpha.point(lambda a: int(a * 0.55)))
-        sil = sil.filter(ImageFilter.MaxFilter(5)).filter(
-            ImageFilter.GaussianBlur(1.5))
+        sil.putalpha(alpha.point(lambda a: int(a * sh_dark)))
+        sil = sil.filter(ImageFilter.MaxFilter(sh_dilate)).filter(
+            ImageFilter.GaussianBlur(sh_blur))
         img.alpha_composite(sil, (int(round(x0 + sh_dx)), int(round(y0 + sh_dy))))
         img.alpha_composite(spr, (x0, y0))
 
@@ -337,7 +346,96 @@ def generate_image(seed, tiles, cfg):
         bh = (vis_r[3] - vis_r[1]) / CANVAS
         labels.append((p["cid"], cx, cy, bw, bh))
 
-    return post_process(img.convert("RGB"), rng, nrng), labels
+    img = img.convert("RGB")
+    if rng.random() < getattr(cfg, "persp_prob", 0.0):
+        img, labels = apply_perspective(img, labels, rng)
+    img = post_process(img, rng, nrng)
+    if rng.random() < getattr(cfg, "glare_prob", 0.0):
+        img = add_glare(img, rng)
+    return img, labels
+
+
+# -------------------------------------------------- hard scenes (v2) -------
+def solve_homography(src_pts, dst_pts):
+    """DLT 求 3x3 单应（src->dst），H[2,2]=1。"""
+    A, B = [], []
+    for (x, y), (u, v) in zip(src_pts, dst_pts):
+        A.append([x, y, 1, 0, 0, 0, -x * u, -y * u]); B.append(u)
+        A.append([0, 0, 0, x, y, 1, -x * v, -y * v]); B.append(v)
+    h = np.linalg.solve(np.array(A, dtype=np.float64),
+                        np.array(B, dtype=np.float64))
+    return np.array([[h[0], h[1], h[2]],
+                     [h[3], h[4], h[5]],
+                     [h[6], h[7], 1.0]])
+
+
+def apply_perspective(img, labels, rng):
+    """轻微 keystone（模拟斜拍）：四角向外 0-4% 扩张保证无空洞，标签随单应映射。"""
+    w, h = img.size
+    src = [(0.0, 0.0), (w, 0.0), (w, h), (0.0, h)]
+    cx, cy = w / 2.0, h / 2.0
+    dst = []
+    for x, y in src:
+        fx = 1.0 + rng.uniform(0.0, 0.04)
+        fy = 1.0 + rng.uniform(0.0, 0.04)
+        dst.append((cx + (x - cx) * fx, cy + (y - cy) * fy))
+    H = solve_homography(src, dst)
+    Minv = np.linalg.inv(H)
+    Minv /= Minv[2, 2]
+    warped = img.transform((w, h), Image.PERSPECTIVE,
+                           tuple(Minv.ravel()[:8]),
+                           resample=Image.BICUBIC)
+
+    def fwd(pt):
+        x, y = pt
+        d = H[2, 0] * x + H[2, 1] * y + H[2, 2]
+        return ((H[0, 0] * x + H[0, 1] * y + H[0, 2]) / d,
+                (H[1, 0] * x + H[1, 1] * y + H[1, 2]) / d)
+
+    out = []
+    for cid, ncx, ncy, nbw, nbh in labels:
+        x0, y0 = (ncx - nbw / 2) * w, (ncy - nbh / 2) * h
+        x1, y1 = (ncx + nbw / 2) * w, (ncy + nbh / 2) * h
+        pts = [fwd((x0, y0)), fwd((x1, y0)), fwd((x1, y1)), fwd((x0, y1))]
+        uxs = [p[0] for p in pts]
+        uys = [p[1] for p in pts]
+        ua = (max(uxs) - min(uxs)) * (max(uys) - min(uys))
+        xs = np.clip(uxs, 0, w)
+        ys = np.clip(uys, 0, h)
+        bx0, bx1 = float(xs.min()), float(xs.max())
+        by0, by1 = float(ys.min()), float(ys.max())
+        ncx2 = (bx0 + bx1) / 2 / w
+        ncy2 = (by0 + by1) / 2 / h
+        if not (0.0 <= ncx2 <= 1.0 and 0.0 <= ncy2 <= 1.0):
+            continue
+        if (bx1 - bx0) * (by1 - by0) < 0.55 * ua or bx1 - bx0 < 2 or by1 - by0 < 2:
+            continue
+        out.append((cid, ncx2, ncy2, (bx1 - bx0) / w, (by1 - by0) / h))
+    return warped, out
+
+
+def add_glare(img, rng):
+    """镜面高光：1-2 条大范围柔和亮斑 + 一个小热点，模拟玻璃/亮面反光。"""
+    w, h = img.size
+    mask = Image.new("L", (w, h), 0)
+    for _ in range(rng.randint(1, 2)):
+        cw, ch = int(rng.uniform(0.5, 1.1) * w), int(rng.uniform(0.2, 0.5) * h)
+        streak = Image.new("L", (cw, ch), 0)
+        sd = ImageDraw.Draw(streak)
+        sd.ellipse([cw * 0.05, ch * 0.15, cw * 0.95, ch * 0.85], fill=255)
+        streak = streak.rotate(rng.uniform(0, 180), expand=True)
+        peak = rng.randint(45, 95)
+        streak = streak.point(lambda a: int(a / 255 * peak))
+        pos = (rng.randint(-cw // 2, w - cw // 2),
+               rng.randint(-ch // 2, h - ch // 2))
+        mask.paste(streak, pos, streak)
+    d = ImageDraw.Draw(mask)
+    hr = rng.uniform(0.03, 0.07) * w
+    hx, hy = rng.uniform(0, w), rng.uniform(0, h)
+    d.ellipse([hx - hr, hy - hr, hx + hr, hy + hr], fill=rng.randint(90, 150))
+    mask = mask.filter(ImageFilter.GaussianBlur(w * rng.uniform(0.015, 0.04)))
+    white = Image.new("RGB", (w, h), (255, 253, 246))
+    return Image.composite(white, img, mask)
 
 
 # -------------------------------------------------------- post-process -----
@@ -405,6 +503,14 @@ def main():
     ap.add_argument("--train", type=int, default=3000)
     ap.add_argument("--val", type=int, default=500)
     ap.add_argument("--seed", type=int, default=42)
+    ap.add_argument("--name-offset", type=int, default=0,
+                    help="文件名编号偏移（多进程分片写同一目录时防重名）")
+    ap.add_argument("--persp-prob", type=float, default=0.0,
+                    help="每图施加轻透视（keystone）的概率")
+    ap.add_argument("--glare-prob", type=float, default=0.0,
+                    help="每图施加镜面高光的概率")
+    ap.add_argument("--strong-shadow-prob", type=float, default=0.0,
+                    help="每图使用强阴影（长深投影）的概率")
     ap.add_argument("--tiles-min", type=int, default=1)
     ap.add_argument("--tiles-max", type=int, default=15)
     ap.add_argument("--empty-prob", type=float, default=0.05)
@@ -446,7 +552,7 @@ def main():
         for i in range(n):
             seed = args.seed * 1_000_000 + split_off + i
             img, labels = generate_image(seed, tiles, args)
-            name = f"mj_{split}_{i:05d}"
+            name = f"mj_{split}_{i + args.name_offset:05d}"
             save_sample(img, labels,
                         out / "images" / split / f"{name}.jpg",
                         out / "labels" / split / f"{name}.txt")
