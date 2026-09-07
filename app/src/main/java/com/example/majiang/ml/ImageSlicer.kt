@@ -26,7 +26,13 @@ class ImageSlicer(
             for (x in xs) {
                 val w = minOf(tileSize, src.width - x)
                 val h = minOf(tileSize, src.height - y)
-                out.add(Slice(x, y, Bitmap.createBitmap(src, x, y, w, h)))
+                var crop = Bitmap.createBitmap(src, x, y, w, h)
+                // createBitmap 在整幅复用时可能返回源对象本身；切片会被管线回收，
+                // 若不复制，恰好等于切片尺寸的输入图（如正方形照片）会在标注阶段崩溃
+                if (crop === src) {
+                    crop = src.copy(src.config ?: Bitmap.Config.ARGB_8888, false)
+                }
+                out.add(Slice(x, y, crop))
             }
         }
         return out

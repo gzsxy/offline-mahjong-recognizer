@@ -27,11 +27,39 @@ $ADB shell input keyevent KEYCODE_WAKEUP >/dev/null 2>&1
 CSV="$OUT/$LABEL.csv"
 [ -f "$CSV" ] || echo "photo,complete_ts,count,seconds" >> "$CSV"
 
+ensure_device() {
+  if ! $ADB get-state >/dev/null 2>&1; then
+    echo "[$(date '+%T')] 连接丢失，尝试 mDNS 自动重连..."
+    $ADB kill-server >/dev/null 2>&1; sleep 2; $ADB start-server >/dev/null 2>&1; sleep 3
+    SVC=$($ADB mdns services 2>/dev/null | grep "adb-tls-connect" | head -1 | awk '{print $NF}')
+    if [ -n "$SVC" ]; then
+      $ADB connect "$SVC" >/dev/null 2>&1
+      DEV="$SVC"
+      echo "[$(date '+%T')] 已重连: $DEV"
+    fi
+    sleep 2
+    $ADB get-state >/dev/null 2>&1 || return 1
+  fi
+  return 0
+}
+
 for photo in "$@"; do
   name=$(basename "$photo" .jpg)
+  ensure_device || { echo "$name,,,,DEVICE_LOST" >> "$CSV"; echo "[$(date '+%T')] $name -> 设备不可达，跳过"; continue; }
   $ADB push "$photo" /data/local/tmp/reg_in.jpg >/dev/null
   $ADB shell "run-as $PKG mkdir -p files" >/dev/null
-  $ADB shell "run-as $PKG cp /data/local/tmp/reg_in.jpg files/reg.jpg" >/dev/null
+  # run-as cp 在 MIUI 上偶发静默失败，重试并校验文件确实落位
+  ok=""
+  for try in 1 2 3; do
+    $ADB shell "run-as $PKG cp /data/local/tmp/reg_in.jpg files/reg.jpg" >/dev/null 2>&1
+    if $ADB shell "run-as $PKG ls files/reg.jpg" >/dev/null 2>&1; then ok=1; break; fi
+    sleep 2
+  done
+  if [ -z "$ok" ]; then
+    echo "[$(date '+%T')] $name -> reg.jpg 拷贝失败，跳过"
+    echo "$name,,COPY_FAIL,0.0" >> "$CSV"
+    continue
+  fi
   $ADB logcat -c
   $ADB shell am force-stop $PKG
   $ADB shell am start -n $PKG/com.example.majiang.MainActivity \
