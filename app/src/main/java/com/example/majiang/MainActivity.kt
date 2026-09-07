@@ -1,6 +1,7 @@
 package com.example.majiang
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.net.Uri
@@ -82,18 +83,27 @@ import java.util.Locale
 
 private const val TAG = "MahjongApp"
 
-// 调试回归触发器：进程级一次性标记，防止 Activity 重建或重组导致重复触发识别
-private var debugTriggerConsumed = false
-
 // 识别并发门闩：同一时刻只允许一个分析在跑（重复触发直接抑制）
 private val analysisGate = java.util.concurrent.atomic.AtomicBoolean(false)
+
+// 调试回归待处理路径（onCreate / onNewIntent 写入，识别轮询循环消费）
+private var pendingDebugImagePath: String? = null
+private var debugTriggerConsumed = false
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         // 调试入口：adb shell am start ... --es debug_image /sdcard/xxx.jpg
         // 免交互直接进识别管线，用于真机自动化回归。
-        setContent { MaterialTheme { AppRoot(debugImagePath = intent?.getStringExtra("debug_image")) } }
+        pendingDebugImagePath = intent?.getStringExtra("debug_image")
+        setContent { MaterialTheme { AppRoot() } }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        // 应用已运行时（热启动）也要接收新的调试请求
+        pendingDebugImagePath = intent.getStringExtra("debug_image")
+        debugTriggerConsumed = false
     }
 }
 
@@ -122,7 +132,7 @@ private sealed interface ModelState {
 }
 
 @Composable
-fun AppRoot(debugImagePath: String? = null) {
+fun AppRoot() {
     val context = LocalContext.current
     val appContext = context.applicationContext
     val historyStore = remember { HistoryStore(File(appContext.filesDir, "history")) }
@@ -205,21 +215,6 @@ fun AppRoot(debugImagePath: String? = null) {
         )
     }
 
-    // 调试回归：冷启动带 debug_image 时自动进识别管线
-    LaunchedEffect(debugImagePath, pipeline) {
-        if (debugImagePath != null && !debugTriggerConsumed && pipeline != null &&
-            pendingPhoto == null && screen == ScreenState.Camera
-        ) {
-            debugTriggerConsumed = true
-            Log.w(TAG, "DEBUG TRIGGER fired, consumed=$debugTriggerConsumed")
-            pendingPhoto = PendingPhoto(
-                PhotoInput.DebugFile(File(debugImagePath)),
-                expected = TileClasses.DEFAULT_EXPECTED_TOTAL
-            )
-            screen = ScreenState.Processing(0, 0)
-        }
-    }
-
     val mainHandler = remember { Handler(Looper.getMainLooper()) }
     // 识别消费循环：LaunchedEffect(Unit) 永不因 key 变化重启，避免长任务中途被
     // 取消丢结果；并发由 analysisGate 保证，轮询消费 pendingPhoto。
@@ -227,6 +222,21 @@ fun AppRoot(debugImagePath: String? = null) {
     val latestPipeline by rememberUpdatedState(pipeline)
     LaunchedEffect(Unit) {
         while (true) {
+            // 调试回归请求消费（onCreate/onNewIntent 写入 pendingDebugImagePath）
+            val debugPath = pendingDebugImagePath
+            if (debugPath != null && !debugTriggerConsumed &&
+                latestPipeline != null && latestPendingPhoto == null &&
+                screen == ScreenState.Camera
+            ) {
+                debugTriggerConsumed = true
+                pendingDebugImagePath = null
+                Log.i(TAG, "debug trigger: $debugPath")
+                pendingPhoto = PendingPhoto(
+                    PhotoInput.DebugFile(File(debugPath)),
+                    expected = TileClasses.DEFAULT_EXPECTED_TOTAL
+                )
+                screen = ScreenState.Processing(0, 0)
+            }
             val request = latestPendingPhoto
             val activePipeline = latestPipeline
             if (request == null || activePipeline == null ||
