@@ -26,8 +26,11 @@ class FaceAndBackEnsemble(
     override fun detect(slice: Bitmap): List<Detection> = buildList {
         addAll(faceDetector.detect(slice).filter { it.classId != TileClasses.BACK_ID })
 
+        // 牌背限定蓝/绿纹理：训练分布限定后，黑背等仍可能被误报（深色矩形相似），
+        // 色彩门控兜底——框内蓝/绿像素占比不足则丢弃
         val regularBacks = backDetector.detect(slice)
             .filter { it.classId == TileClasses.BACK_ID }
+            .filter { hasColoredBackAppearance(slice, it.box) }
         addAll(regularBacks)
 
         // The scattered model is deliberately used as a fallback. The regular
@@ -55,6 +58,7 @@ class FaceAndBackEnsemble(
         }
     }
 
+    /** 框内蓝/绿色像素占比 >= 18% 判为牌背外观（黑背/深色物误报过滤）。 */
     private fun hasColoredBackAppearance(bitmap: Bitmap, box: RectF): Boolean {
         if (bitmap.width == 0 || bitmap.height == 0) return false
         val left = floor(box.left).toInt().coerceIn(0, bitmap.width - 1)

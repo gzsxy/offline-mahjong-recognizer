@@ -56,15 +56,33 @@ def load_tiles():
         tiles[cid] = [Image.open(d / f"{stem}.png").convert("RGBA") for d in TILE_DIRS]
     back_paths = [d / "Back.png" for d in TILE_DIRS]
     if all(p.exists() for p in back_paths):
-        tiles[BACK_ID] = [Image.open(p).convert("RGBA") for p in back_paths]
+        kept = [im for im in
+                (Image.open(p).convert("RGBA") for p in back_paths)
+                if _is_blue_green_back(im)]
+        tiles[BACK_ID] = kept or None  # 全被过滤则回退程序化生成
     else:
         tiles[BACK_ID] = None  # procedural fallback
     sprites = []
     if BACK_SPRITES_DIR.exists():
         for p in sorted(BACK_SPRITES_DIR.glob("*.png")):
             sprites.append(Image.open(p).convert("RGBA"))
-    tiles["back_sprites"] = sprites
+    # 背精灵同样限定蓝/绿（剔除黑背变体与公开集杂色背）
+    tiles["back_sprites"] = [im for im in sprites if _is_blue_green_back(im)]
     return tiles
+
+
+def _is_blue_green_back(im, min_ratio=0.18):
+    """蓝/绿背判定：与 App 端 hasColoredBackAppearance 同口径。"""
+    arr = np.asarray(im.convert("RGB").resize((80, 100)), dtype=np.int32)
+    r, g, b = arr[..., 0], arr[..., 1], arr[..., 2]
+    mx = np.maximum(np.maximum(r, g), b)
+    mn = np.minimum(np.minimum(r, g), b)
+    spread = mx - mn
+    colored = (mx > 0) & (spread > 25) & (spread * 5 > mx)
+    blue_back = (b * 100 > r * 112) & (b * 100 > g * 103)
+    green_back = (g * 100 > r * 112) & (g * 100 > b * 103)
+    hit = colored & (blue_back | green_back)
+    return bool(hit.mean() >= min_ratio)
 
 
 def procedural_back(rng):
@@ -74,10 +92,10 @@ def procedural_back(rng):
         (30, 90, 200),   # blue
         (30, 140, 90),   # green
         (20, 140, 160),  # teal
-        (160, 40, 110),  # magenta
-        (200, 120, 30),  # orange
-        (90, 60, 160),   # purple
+        (40, 120, 180),  # steel blue
+        (50, 160, 120),  # jade
     ]
+    # 牌背限定蓝/绿系：黑背/杂色背不在目标分布内（2026-09-08 需求）
     base = rng.choice(families)
     img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
